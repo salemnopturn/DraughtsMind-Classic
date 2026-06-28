@@ -128,7 +128,7 @@ O motor implementa fielmente as regras da Confederação Brasileira de Damas:
 ## 💾 Importação e Exportação PDN
 
 - **Exportar** — salva a partida atual (incluindo variantes) no formato `.pdn` padrão
-- **Importar** — carrega um arquivo `.pdn` existente (suporta `.pdn`, `.abd`, `.pnd`)
+- **Importar** — carrega um arquivo `.pdn` existente 
 - **Colar PDN** — cole uma sequência de lances diretamente na caixa de texto e clique em **Validar & Reconstruir**
 
 O PDN exportado inclui metadados como versão do motor, profundidade, tempo e hash da posição.
