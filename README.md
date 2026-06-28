@@ -1,4 +1,4 @@
-# ⛃ DraughtsMind Classic ⛃
+# ⛃ DraughtsMind Classic
 
 > **Think Deeper. Play Better.**
 
@@ -6,33 +6,132 @@ Motor de IA de alto desempenho para **Damas Brasileiras** (regras CBD), rodando 
 
 ---
 
-## 🎮 Demo
+## 🎮 Como usar
 
-Basta abrir o arquivo `DraughtsMind Classic.html` no navegador. Nenhuma instalação necessária.
+Basta abrir o arquivo `DraughtsMind Classic.html` em qualquer navegador moderno. Nenhuma instalação necessária.
 
 ---
 
 ## ✨ Funcionalidades
 
-- **Motor reengenheirado** — Zobrist 64-bit BigInt, Tabela de Transposição compacta 262K (2-way `Uint32Array`), algoritmos PVS + LMR + NMP + IID + qsearch
-- **Avaliação posicional** — PST (Piece-Square Tables), controle do centro e penalização de bordas
-- **Board Editor embutido** — edite posições livremente antes de jogar
-- **Livro de Aberturas Master** — mais de 3.100 linhas maximais
-- **Fidelidade às regras CBD** — Lei da Maioria, tripla repetição, regra dos 20 lances, finais Art. 59/100
-- **PDN import/export** — compatível com o formato padrão de Damas
-- **Análise em tempo real** — avaliação e profundidade exibidas durante o jogo
-- **Árvore de variantes** — explore linhas alternativas
-- **100% offline** — nenhuma chamada de rede, nenhum dado enviado a servidores
+### Modos de Jogo
+
+- **Humano vs Humano** — dois jogadores na mesma tela
+- **Humano (Brancas) vs CPU (Vermelhas)** — padrão
+- **CPU (Brancas) vs Humano (Vermelhas)** — jogue com as vermelhas
+- **CPU vs CPU** — observe duas IAs jogando entre si
+- **Sandbox (Livre)** — modo livre para experimentos, sem regras de turno
+
+### Níveis de Dificuldade
+
+| Nível | Profundidade | Perfil |
+|---|---|---|
+| Rápido | Ply 4 | Partidas ágeis |
+| Normal | Ply 6 | Uso geral |
+| Difícil | Ply 8 | Desafiador |
+| Pro | Ply 10 | Padrão recomendado |
+| Mestre | Ply 12 | Alto nível |
+| Elite | Ply 14 | Para experientes |
+| Grandmaster | Ply 16 | Nível máximo |
+
+### Controle de Tempo
+
+| Formato | Tempo |
+|---|---|
+| Sem Limite | — |
+| Bullet | 1 minuto |
+| Blitz | 3 ou 5 minutos |
+| Rápido | 10 ou 15 minutos |
+| Clássico | 30 minutos |
+| Pro | 60 minutos |
 
 ---
 
-## 🚀 Como usar
+## 🧠 Motor de IA
 
-1. Faça o download do arquivo `DraughtsMind Classic.html`
-2. Abra-o em qualquer navegador moderno (Chrome, Firefox, Edge, Safari)
-3. Jogue!
+O DraughtsMind Classic utiliza técnicas avançadas de busca em jogos:
 
-Não é necessário instalar nada, criar conta ou ter conexão com a internet.
+- **PVS** (Principal Variation Search) — variante otimizada do alpha-beta
+- **LMR** (Late Move Reductions) — redução de profundidade para lances tardios
+- **NMP** (Null Move Pruning) — poda por lance nulo
+- **IID** (Internal Iterative Deepening) — aprofundamento iterativo interno
+- **Qsearch** — busca de quiescência para evitar o efeito horizonte
+- **Zobrist Hashing 64-bit** com `BigInt` para detecção de repetição
+- **Tabela de Transposição compacta** de 262K entradas (2-way `Uint32Array`)
+- **Avaliação posicional** com PST (Piece-Square Tables), controle do centro e penalização de bordas
+- **Livro de Aberturas Master** com mais de 3.100 linhas maximais validadas pelo motor
+
+---
+
+## 📋 Regras e Fidelidade CBD
+
+O motor implementa fielmente as regras da Confederação Brasileira de Damas:
+
+- **Lei da Maioria** — obrigatoriedade de capturar o maior número possível de peças
+- **Promoção a Dama** — somente ao final do lance de captura (Art. 13)
+- **Tripla repetição** — empate por repetição de posição
+- **Regra dos 20 lances** — empate em finais de damas sem captura ou avanço de pedra
+- **Art. 59 (finais de damas):**
+  - `1D × 1D` — empate em 2 lances
+  - Finais com `1D+1P × 1D` e variantes — empate em 5 lances
+- **Art. 100** — finais específicos com dama solitária na grande diagonal
+
+---
+
+## 🛠️ Ferramentas de Análise e Edição
+
+### Análise em Tempo Real
+- Avaliação da posição em centipedões
+- Profundidade de busca atual
+- Tempo de cálculo
+- Indicação de jogada do livro de aberturas com `[📖 Livro]`
+
+### Botão Sugestão
+- Calcula e exibe a melhor jogada disponível para o jogador atual
+- Indica a avaliação e profundidade da busca realizada
+- Destaca visualmente a peça e os destinos sugeridos
+
+### Botão Forçar Engine
+- Força a CPU a jogar imediatamente, mesmo fora do turno configurado
+
+### Board Editor (Editor de Posição)
+- Ative com o botão **Editar**
+- Clique com o **botão esquerdo** para adicionar peças (pedras e damas, brancas ou vermelhas)
+- Clique com o **botão direito** para remover peças
+- Escolha de quem é o turno inicial (Brancas ou Vermelhas)
+- Ao iniciar, o jogo continua a partir da posição editada
+
+### Contador de Peças
+- Exibe em tempo real o número de pedras (`P`) e damas (`D`) de cada lado
+
+### Estatísticas da CPU (CPU vs CPU)
+- Placar de vitórias, empates e derrotas por partida no modo CPU vs CPU
+
+---
+
+## 📖 Histórico e Navegação
+
+- **Histórico de lances** exibido em notação algébrica/numérica
+- **Árvore de variantes** — explore linhas alternativas diretamente no tabuleiro
+- **Modal de escolha** ao realizar um lance em posição já existente: substituir ou adicionar variação
+- Navegação por botões e atalhos de teclado:
+
+| Ação | Botão | Teclado |
+|---|---|---|
+| Ir ao início | `\|<` | ↑ |
+| Lance anterior | `<` | ← |
+| Próximo lance | `>` | → |
+| Ir ao fim | `>\|` | ↓ |
+
+---
+
+## 💾 Importação e Exportação PDN
+
+- **Exportar** — salva a partida atual (incluindo variantes) no formato `.pdn` padrão
+- **Importar** — carrega um arquivo `.pdn` existente (suporta `.pdn`, `.abd`, `.pnd`)
+- **Colar PDN** — cole uma sequência de lances diretamente na caixa de texto e clique em **Validar & Reconstruir**
+
+O PDN exportado inclui metadados como versão do motor, profundidade, tempo e hash da posição.
 
 ---
 
@@ -54,20 +153,7 @@ Requer um navegador moderno com suporte a **BigInt** e **ES2020+** (Chrome 67+, 
 - Nenhum dado coletado ou transmitido
 - Nenhum rastreador, cookie ou anúncio
 - Código totalmente auditável — um único arquivo HTML autocontido
-
----
-
-## 🧠 Sobre o Motor
-
-O DraughtsMind utiliza técnicas avançadas de busca em jogos:
-
-- **PVS** (Principal Variation Search) — variante otimizada do alpha-beta
-- **LMR** (Late Move Reductions) — redução de profundidade para lances tardios
-- **NMP** (Null Move Pruning) — poda por lance nulo
-- **IID** (Internal Iterative Deepening) — aprofundamento iterativo interno
-- **Qsearch** — busca de quiescência para evitar o efeito horizonte
-- **Zobrist Hashing 64-bit** com `BigInt` para detecção de repetição e TT
-- **Livro de aberturas** integrado com +3.100 posições
+- 100% offline: funciona sem internet após o download
 
 ---
 
