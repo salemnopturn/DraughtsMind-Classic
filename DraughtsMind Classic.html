@@ -21,7 +21,7 @@ Features:
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1">
-    <title>DraughtsMind v31.2 — Damas Brasileiras | Knowledge Base Integration</title>
+    <title>DraughtsMind v32 — Damas Brasileiras | Knowledge Base Integration</title>
     <meta name="description" content="DraughtsMind v28 GRANDMASTER EDITION — Elite Brazilian Draughts engine. Play against a powerful AI with opening book, iterative deepening, alpha-beta, TT, and more.">
     <meta name="robots" content="index, follow">
     <meta property="og:title" content="DraughtsMind — Damas Brasileiras">
@@ -817,7 +817,7 @@ Features:
 //  Book: +3100 linhas maximais com softmax adaptativo
 // ══════════════════════════════════════════════════════════════════════════════
 
-    const ENGINE_VERSION = "31.1.0";
+    const ENGINE_VERSION = "32.0.0";
     const EMPTY = 0, W_MAN = 1, V_MAN = -1, W_KING = 2, V_KING = -2;
     const MODE_HVH = 0, MODE_HVM = 1, MODE_MVH = 2, MODE_MVM = 3, MODE_SAND = 4;
 
@@ -1098,8 +1098,7 @@ Features:
 
             if (endgameLimit > 0) {
                 if (!this.isEndgame) { this.isEndgame = true; this.endgameClock = 0; this.endgameLimit = endgameLimit; }
-                else if (m.captured.length > 0) { this.endgameClock = 0; this.endgameLimit = endgameLimit; }
-                else this.endgameClock++;
+                else { this.endgameClock++; this.endgameLimit = endgameLimit; }
             } else {
                 this.isEndgame = false; this.endgameClock = 0; this.endgameLimit = 10;
             }
@@ -1137,7 +1136,7 @@ Features:
             return { wM, bM, wK, bK };
         }
 
-        // ── Avaliação v3 (reengineered) ─────────────────────────────────────────────
+        // ── Avaliação v4 — clean, phase-aware ────────────────────────────────
         eval() {
             const { wM, bM, wK, bK } = this.countMaterial();
             const totalPieces = wM + bM + wK + bK;
@@ -1145,26 +1144,47 @@ Features:
             const kv = 300 + (24 - ph) * 6;
             let sc = (wM - bM) * 100 + (wK - bK) * kv;
 
-            // Center squares for fast lookup
             const CENTER_BIG = new Set([27, 36, 34, 29]);
-            const CENTER_SM = new Set([18, 20, 25, 38, 43, 45]);
+            const CENTER_SM  = new Set([18, 20, 25, 38, 43, 45]);
+
+            let wMob = 0, bMob = 0;
 
             for (let i = 0; i < 64; i++) {
                 const p = this.board[i];
                 if (p === 0) continue;
                 const sign = Math.sign(p);
+                const r = i >> 3, c = i & 7;
+                const isWhite = sign === 1;
+
                 if (p === W_MAN) sc += PST_M[i];
                 else if (p === V_MAN) sc -= PST_M[63 - i];
                 else if (p === W_KING) sc += PST_K[i];
                 else if (p === V_KING) sc -= PST_K[63 - i];
 
-                const c = i & 7;
-                // Edge penalty
-                if (c === 0 || c === 7) sc += sign === 1 ? -7 : 7;
-                // Center bonus
-                if (CENTER_BIG.has(i)) sc += sign === 1 ? 11 : -11;
-                else if (CENTER_SM.has(i)) sc += sign === 1 ? 5 : -5;
+                // Edge penalty (scaled by phase — more important in endgame)
+                if (c === 0 || c === 7) {
+                    const edgePen = 7 + ((24 - ph) >> 1);
+                    sc += isWhite ? -edgePen : edgePen;
+                }
+                // Center bonus (scaled by phase)
+                const centerBonus = 8 + ((24 - ph) >> 2);
+                if (CENTER_BIG.has(i))      sc += isWhite ? centerBonus + 3 : -(centerBonus + 3);
+                else if (CENTER_SM.has(i))  sc += isWhite ? centerBonus : -centerBonus;
+
+                // Mobility: count attackers toward opponent's half
+                if ((isWhite && r >= 3) || (!isWhite && r <= 4)) {
+                    if (Math.abs(p) === 2) {
+                        if ((isWhite && r >= 3) || (!isWhite && r <= 4)) {
+                            if (isWhite) wMob += 2; else bMob += 2;
+                        }
+                    } else {
+                        if (isWhite) wMob++; else bMob++;
+                    }
+                }
             }
+
+            // Mobility balance (small bonus)
+            sc += (wMob - bMob) * 3;
 
             return this.turn === 1 ? sc : -sc;
         }
@@ -4990,12 +5010,12 @@ Features:
 
             let score;
             if (depth >= 5 && bestScore > -9000 && bestScore < 9000) {
-                let delta = 10, ok = false;
+                let delta = 10, ok = false, wc = bestScore;
                 while (!ok && !searchAborted) {
-                    score = search(state, depth, bestScore - delta, bestScore + delta, 0, -1, -1);
+                    score = search(state, depth, wc - delta, wc + delta, 0, -1, -1);
                     if (searchAborted) break;
-                    if (score > bestScore - delta && score < bestScore + delta) ok = true;
-                    else { delta = Math.round(delta * 1.5); if (delta >= 9000) { score = search(state, depth, -Infinity, Infinity, 0, -1, -1); ok = true; } }
+                    if (score > wc - delta && score < wc + delta) ok = true;
+                    else { wc = score; delta = Math.round(delta * 1.5); if (delta >= 9000) { score = search(state, depth, -Infinity, Infinity, 0, -1, -1); ok = true; } }
                 }
             } else {
                 score = search(state, depth, -Infinity, Infinity, 0, -1, -1);
@@ -5344,8 +5364,8 @@ Features:
                 if (gameState.turn === 1) { timeW = Math.max(0, timeW - uncharged); }
                 else                      { timeB = Math.max(0, timeB - uncharged); }
                 clockLastStamp = now;
-if (timeW <= 0) { timeW=0; updateClocks(); popModal("Fim de Jogo","Tempo esgotado! Vermelhas vencem."); return; }
-            if (timeB <= 0) { timeB=0; updateClocks(); popModal("Fim de Jogo","Tempo esgotado! Brancas vencem."); return; }
+                if (timeW <= 0) { timeW=0; updateClocks(); popModal("Fim de Jogo","Tempo esgotado! Vermelhas vencem."); return; }
+                if (timeB <= 0) { timeB=0; updateClocks(); popModal("Fim de Jogo","Tempo esgotado! Brancas vencem."); return; }
                 updateClocks();
             }
             if (res.move) exec(res.move); else render();
@@ -5540,6 +5560,7 @@ if (timeW <= 0) { timeW=0; updateClocks(); popModal("Fim de Jogo","Tempo esgotad
         stopClock(); gameStarted=false; gameEnded=false;
         currentNode=n; gameState=n.state.clone();
         lastM=n.move||null; selIdx=-1; valTgt=[];
+        nonBookPlyCount = 0; // reset transition counter on navigation
         txtStatus.innerText="⏸ Pausado — pressione ▶ para continuar";
         render();
     };
@@ -5755,7 +5776,7 @@ if (timeW <= 0) { timeW=0; updateClocks(); popModal("Fim de Jogo","Tempo esgotad
     resetBoard();
     // Set dynamic version badge
     const _vb = document.getElementById('version-badge');
-    if (_vb) _vb.textContent = `Reengineered`;
+    if (_vb) _vb.textContent = `v32`;
 
 </script>
 </body>
