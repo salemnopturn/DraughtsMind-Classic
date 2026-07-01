@@ -1,4 +1,4 @@
-# ⛃ DraughtsMind Classic
+# ⛃ DraughtsMind Classic ⛃
 
 > **Think Deeper. Play Better.**
 
