@@ -807,6 +807,7 @@ Features:
 </div>
 
 <script>
+"use strict";
 // ══════════════════════════════════════════════════════════════════════════════
 //  DraughtsMind v31.2 — Knowledge Base Integration
 //  Damas Brasileiras (CBD, 8×8), 100% offline, HTML único.
@@ -820,7 +821,27 @@ Features:
 
     const ENGINE_VERSION = "32.0.0";
     const EMPTY = 0, W_MAN = 1, V_MAN = -1, W_KING = 2, V_KING = -2;
+    const NO_CAPTURES = [];
+    const DIRS_ALL = [[1,1],[1,-1],[-1,1],[-1,-1]];
+    const DIRS_W = [[1,1],[1,-1]];
+    const DIRS_B = [[-1,1],[-1,-1]];
+    const LMP_TABLE = [0, 5, 9, 15, 22, 30];
     const MODE_HVH = 0, MODE_HVM = 1, MODE_MVH = 2, MODE_MVM = 3, MODE_SAND = 4;
+
+    // Move object pool (stack allocator)
+    const movePool = [];
+    let movePoolPos = 0;
+    function saveMP() { return movePoolPos; }
+    function restoreMP(pos) { movePoolPos = pos; }
+    function allocMv(from, to, path, captured, promo, isPawn, capKings) {
+        let m;
+        if (movePoolPos < movePool.length) { m = movePool[movePoolPos]; }
+        else { m = {}; movePool.push(m); }
+        movePoolPos++;
+        m.from = from; m.to = to; m.path = path; m.captured = captured;
+        m.promo = promo; m.isPawn = isPawn; m.capKings = capKings;
+        return m;
+    }
 
     let cfgDepth = 10, cfgMode = MODE_HVM, cfgView = 'W', isAnalysisOn = false; // [FIX-V31-DEPTH] padrão 10
     let isComputing = false, gameEnded = false, gameStarted = false;
@@ -893,6 +914,8 @@ Features:
         5,0,17,0,18,0,13,0,  0,9,0,13,0,14,0,5,
         4,0,8,0,9,0,8,0,  0,3,0,3,0,3,0,3,
     ];
+    const CENTER_BIG = new Set([27, 36, 34, 29]);
+    const CENTER_SM  = new Set([18, 20, 25, 38, 43, 45]);
     // ════════════════════════════════════════════════════════════════════════
     //  STATE
     // ════════════════════════════════════════════════════════════════════════
@@ -900,6 +923,8 @@ Features:
         constructor() {
             this.board = new Int8Array(64);
             this.turn  = 1;
+            this.hash  = 0n;
+            this.wP = this.bP = this.wK = this.bK = 0;
             this.hashHist      = [];
             this.halfMoveClock = 0;
             this.endgameClock  = 0;
@@ -910,14 +935,15 @@ Features:
         }
         init() {
             this.board.fill(EMPTY);
+            this.wP = this.bP = this.wK = this.bK = 0;
             for (let i = 0; i < 64; i++) {
                 const r = i >> 3, c = i & 7;
                 if ((r + c) % 2 === 0) {
-                    if (r < 3)      this.board[i] = W_MAN;
-                    else if (r > 4) this.board[i] = V_MAN;
+                    if (r < 3)      { this.board[i] = W_MAN; this.wP++; }
+                    else if (r > 4) { this.board[i] = V_MAN; this.bP++; }
                 }
             }
-            this.turn = 1; this.hashHist = [this.hash()];
+            this.turn = 1; this._rehash(); this.hashHist = [this.hash];
             this.halfMoveClock = 0; this.endgameClock = 0; this.isEndgame = false; this.endgameLimit = 10;
         }
 
@@ -925,6 +951,8 @@ Features:
             const s = Object.create(State.prototype);
             s.board         = this.board.slice();
             s.turn          = this.turn;
+            s.hash          = this.hash;
+            s.wP = this.wP; s.bP = this.bP; s.wK = this.wK; s.bK = this.bK;
             s.hashHist      = this.hashHist.slice();
             s.halfMoveClock = this.halfMoveClock;
             s.endgameClock  = this.endgameClock;
@@ -935,14 +963,20 @@ Features:
             return s;
         }
 
-        hash() {
+        hash() { return this.hash; }
+
+        _rehash() {
             let h = 0n;
+            this.wP = this.bP = this.wK = this.bK = 0;
             for (let i = 0; i < 64; i++) {
                 const p = this.board[i];
-                if (p !== EMPTY) h ^= zp[i * 4 + getPieceIdx(p)];
+                if (p === EMPTY) continue;
+                h ^= zp[i * 4 + getPieceIdx(p)];
+                if (p === W_MAN) this.wP++; else if (p === V_MAN) this.bP++;
+                else if (p === W_KING) this.wK++; else if (p === V_KING) this.bK++;
             }
             if (this.turn === -1) h ^= zt;
-            return h & M64;
+            this.hash = h & M64;
         }
         isValid(r, c) { return r >= 0 && r < 8 && c >= 0 && c < 8; }
 
@@ -968,10 +1002,30 @@ Features:
             return simples.sort(moveSorter);
         }
 
+        getCapturesOnly() {
+            const moves = [];
+            for (let i = 0; i < 64; i++) {
+                const p = this.board[i];
+                if (p === EMPTY || Math.sign(p) !== this.turn) continue;
+                const isKing = (p === W_KING || p === V_KING);
+                const caps = this.getCaptures(i, i >> 3, i & 7, isKing, [], i, []);
+                if (caps.length > 0) moves.push(...caps);
+            }
+            if (moves.length > 0) {
+                let maxC = 0;
+                for (let i = 0; i < moves.length; i++)
+                    if (moves[i].captured.length > maxC) maxC = moves[i].captured.length;
+                const filtered = [];
+                for (let i = 0; i < moves.length; i++)
+                    if (moves[i].captured.length === maxC) filtered.push(moves[i]);
+                return filtered.sort(moveSorter);
+            }
+            return moves;
+        }
+
         getSimples(idx, r, c, isKing) {
             const moves = [];
-            const dirs  = isKing ? [[1,1],[1,-1],[-1,1],[-1,-1]]
-                                 : this.turn === 1 ? [[1,1],[1,-1]] : [[-1,1],[-1,-1]];
+            const dirs  = isKing ? DIRS_ALL : this.turn === 1 ? DIRS_W : DIRS_B;
             for (const d of dirs) {
                 for (let step = 1; step <= (isKing ? 7 : 1); step++) {
                     const nr = r + d[0] * step, nc = c + d[1] * step;
@@ -979,15 +1033,15 @@ Features:
                     const nIdx = nr * 8 + nc;
                     if (this.board[nIdx] !== EMPTY) break;
                     const isPromo = !isKing && ((this.turn === 1 && nr === 7) || (this.turn === -1 && nr === 0));
-                    moves.push({ from: idx, to: nIdx, path: [nIdx], captured: [], promo: isPromo, isPawn: !isKing, capKings: 0 });
+                    moves.push(allocMv(idx, nIdx, null, NO_CAPTURES, isPromo, !isKing, 0));
                 }
             }
             return moves;
         }
 
         getCaptures(idx, r, c, isKing, curCap, origFrom, curPath) {
-            const moves = [], dirs = [[1,1],[1,-1],[-1,1],[-1,-1]];
-            for (const d of dirs) {
+            const moves = [];
+            for (const d of DIRS_ALL) {
                 let enemyIdx = -1, step = 1;
                 while (true) {
                     const nr = r + d[0] * step, nc = c + d[1] * step;
@@ -1002,22 +1056,22 @@ Features:
                         // várias peças apenas passe pela casa de coroação SEM AÍ PARAR
                         // NÃO será promovida a dama. A promoção só ocorre quando a pedra
                         // TERMINA a sequência na casa de coroação.
-                        const nCap = curCap.concat(enemyIdx), nPath = curPath.concat(chk);
+                        curCap.push(enemyIdx);
+                        curPath.push(chk);
                         const origP = this.board[idx];
-                        // During the sequence, the piece always remains what it was (man stays man).
                         this.board[idx] = EMPTY; this.board[chk] = origP;
-                        const nextCaps = this.getCaptures(chk, nr, nc, isKing, nCap, origFrom, nPath);
+                        const nextCaps = this.getCaptures(chk, nr, nc, isKing, curCap, origFrom, curPath);
                         this.board[idx] = origP; this.board[chk] = EMPTY;
                         if (nextCaps.length > 0) {
                             moves.push(...nextCaps);
                         } else {
-                            // Sequence ends here: promote ONLY if the final landing square
-                            // is the crown row (the piece "stops" there).
                             const atCrown = !isKing && ((this.turn === 1 && nr === 7) || (this.turn === -1 && nr === 0));
                             let capKings = 0;
-                            for (const cIdx of nCap) if (Math.abs(this.board[cIdx]) === 2) capKings++;
-                            moves.push({ from: origFrom, to: chk, path: nPath, captured: nCap, promo: atCrown, isPawn: !isKing, capKings });
+                            for (const cIdx of curCap) if (Math.abs(this.board[cIdx]) === 2) capKings++;
+                            moves.push(allocMv(origFrom, chk, curPath.slice(), curCap.slice(), atCrown, !isKing, capKings));
                         }
+                        curCap.pop();
+                        curPath.pop();
                         if (!isKing) break;
                     }
                     step++;
@@ -1028,22 +1082,37 @@ Features:
         }
 
         applyMove(m) {
-            let p = this.board[m.from]; this.board[m.from] = EMPTY;
-            for (const cap of m.captured) this.board[cap] = EMPTY;
-            if (m.promo) p = Math.sign(p) * 2;
+            let p = this.board[m.from];
+            this.hash ^= zp[m.from * 4 + getPieceIdx(p)];
+            this.board[m.from] = EMPTY;
+            if (p === W_MAN) this.wP--; else if (p === V_MAN) this.bP--;
+            else if (p === W_KING) this.wK--; else if (p === V_KING) this.bK--;
+
+            for (const cap of m.captured) {
+                const cp = this.board[cap];
+                this.hash ^= zp[cap * 4 + getPieceIdx(cp)];
+                this.board[cap] = EMPTY;
+                if (cp === W_MAN) this.wP--; else if (cp === V_MAN) this.bP--;
+                else if (cp === W_KING) this.wK--; else if (cp === V_KING) this.bK--;
+            }
+
+            if (m.promo) {
+                const sign = Math.sign(p);
+                if (sign === 1) { this.wP--; this.wK++; }
+                else { this.bP--; this.bK++; }
+                p = sign * 2;
+            }
+
+            this.hash ^= zp[m.to * 4 + getPieceIdx(p)];
             this.board[m.to] = p;
+            if (p === W_MAN) this.wP++; else if (p === V_MAN) this.bP++;
+            else if (p === W_KING) this.wK++; else if (p === V_KING) this.bK++;
 
             if (m.captured.length > 0 || m.isPawn) this.halfMoveClock = 0;
             else this.halfMoveClock++;
 
-            let wK = 0, wP = 0, bK = 0, bP = 0;
-            for (let i = 0; i < 64; i++) {
-                const sq = this.board[i];
-                if (sq === W_KING) wK++; else if (sq === W_MAN) wP++;
-                else if (sq === V_KING) bK++; else if (sq === V_MAN) bP++;
-            }
-
             // Returns 0 (not endgame), 4 (1D×1D: 2-move rule), or 10 (other: 5-move rule)
+            const { wP, bP, wK, bK } = this;
             const endgameLimit = (() => {
                 if (wP === 0 && bP === 0) {
                     // Art.59.D: 1D×1D — empate em 2 lances (4 meios-lances)
@@ -1105,11 +1174,51 @@ Features:
             }
 
             this.turn *= -1;
+            this.hash ^= zt;
 
             if (m.captured.length > 0) this.hashHist = [];
-            const h = this.hash();
+            const h = this.hash;
             if (this.hashHist.length >= 256) this.hashHist.shift();
             this.hashHist.push(h);
+        }
+
+        makeMove(m) {
+            const hh = this.hashHist;
+            const hhLen = hh.length;
+            const shifted = hhLen >= 256 ? hh[0] : 0n;
+            const undo = {
+                capsP: m.captured.map(sq => this.board[sq]),
+                fromP: this.board[m.from],
+                wP: this.wP, bP: this.bP, wK: this.wK, bK: this.bK,
+                hash: this.hash,
+                turn: this.turn,
+                hmc: this.halfMoveClock,
+                hh, hhLen, shifted,
+                ec: this.endgameClock, ie: this.isEndgame, el: this.endgameLimit,
+                tw: this.timeW, tb: this.timeB
+            };
+            this.applyMove(m);
+            return undo;
+        }
+
+        unmakeMove(m, undo) {
+            this.board[m.to] = EMPTY;
+            for (let i = 0; i < m.captured.length; i++) this.board[m.captured[i]] = undo.capsP[i];
+            this.board[m.from] = undo.fromP;
+            this.wP = undo.wP; this.bP = undo.bP; this.wK = undo.wK; this.bK = undo.bK;
+            this.hash = undo.hash;
+            this.turn = undo.turn;
+            this.halfMoveClock = undo.hmc;
+            if (m.captured.length > 0) {
+                this.hashHist = undo.hh;
+            } else if (undo.hhLen >= 256) {
+                this.hashHist.pop();
+                this.hashHist.unshift(undo.shifted);
+            } else {
+                this.hashHist.length = undo.hhLen;
+            }
+            this.endgameClock = undo.ec; this.isEndgame = undo.ie; this.endgameLimit = undo.el;
+            this.timeW = undo.tw; this.timeB = undo.tb;
         }
 
         checkDraw() {
@@ -1127,26 +1236,12 @@ Features:
             return false;
         }
 
-        countMaterial() {
-            let wM=0, bM=0, wK=0, bK=0;
-            for (let i=0; i<64; i++) {
-                const p=this.board[i];
-                if (p===W_MAN) wM++; else if (p===V_MAN) bM++;
-                else if (p===W_KING) wK++; else if (p===V_KING) bK++;
-            }
-            return { wM, bM, wK, bK };
-        }
-
         // ── Avaliação v4 — clean, phase-aware ────────────────────────────────
         eval() {
-            const { wM, bM, wK, bK } = this.countMaterial();
-            const totalPieces = wM + bM + wK + bK;
+            const totalPieces = this.wP + this.bP + this.wK + this.bK;
             const ph = Math.min(totalPieces, 24);
             const kv = 300 + (24 - ph) * 6;
-            let sc = (wM - bM) * 100 + (wK - bK) * kv;
-
-            const CENTER_BIG = new Set([27, 36, 34, 29]);
-            const CENTER_SM  = new Set([18, 20, 25, 38, 43, 45]);
+            let sc = (this.wP - this.bP) * 100 + (this.wK - this.bK) * kv;
 
             let wMob = 0, bMob = 0;
 
@@ -1173,11 +1268,10 @@ Features:
                 else if (CENTER_SM.has(i))  sc += isWhite ? centerBonus : -centerBonus;
 
                 // Mobility: count attackers toward opponent's half
-                if ((isWhite && r >= 3) || (!isWhite && r <= 4)) {
+                const inOppHalf = (isWhite && r >= 3) || (!isWhite && r <= 4);
+                if (inOppHalf) {
                     if (Math.abs(p) === 2) {
-                        if ((isWhite && r >= 3) || (!isWhite && r <= 4)) {
-                            if (isWhite) wMob += 2; else bMob += 2;
-                        }
+                        if (isWhite) wMob += 2; else bMob += 2;
                     } else {
                         if (isWhite) wMob++; else bMob++;
                     }
@@ -1256,6 +1350,7 @@ Features:
     const MAX_PLY = 64;
     const histTable = new Int32Array(4096);
     const killers = new Int32Array(MAX_PLY * 2);
+    let orderSc = new Int32Array(64);
 
     function storeKiller(ply, m) {
         if (ply >= MAX_PLY) return;
@@ -1275,12 +1370,13 @@ Features:
     }
 
     function orderMoves(moves, hfm, htm, ply) {
-        const n = moves.length, sc = new Int32Array(n);
-        for (let i = 0; i < n; i++) sc[i] = scoreMove(moves[i], hfm, htm, ply);
+        const n = moves.length;
+        if (n > orderSc.length) orderSc = new Int32Array(n);
+        for (let i = 0; i < n; i++) orderSc[i] = scoreMove(moves[i], hfm, htm, ply);
         for (let i = 1; i < n; i++) {
-            const si = sc[i], mi = moves[i]; let j = i - 1;
-            while (j >= 0 && sc[j] < si) { sc[j + 1] = sc[j]; moves[j + 1] = moves[j]; j--; }
-            sc[j + 1] = si; moves[j + 1] = mi;
+            const si = orderSc[i], mi = moves[i]; let j = i - 1;
+            while (j >= 0 && orderSc[j] < si) { orderSc[j + 1] = orderSc[j]; moves[j + 1] = moves[j]; j--; }
+            orderSc[j + 1] = si; moves[j + 1] = mi;
         }
     }    // ════════════════════════════════════════════════════════════════════════
     //  LIVRO DE ABERTURAS v15
@@ -4800,8 +4896,7 @@ Features:
         });
         const maxSc = scored.reduce((mx, e) => Math.max(mx, e.score), -Infinity);
         // [BOOK-V29-TEMP] Temperatura adaptativa: abertura=14, meio-jogo=10, final=8
-        let pcCount = 0;
-        for (let i = 0; i < 64; i++) if (state.board[i] !== 0) pcCount++;
+        const pcCount = state.wP + state.bP + state.wK + state.bK;
         const BOOK_TEMP = pcCount > 18 ? 14 : pcCount > 14 ? 10 : 8;
         const weights = scored.map(e => Math.exp((e.score - maxSc) / BOOK_TEMP));
         const total = weights.reduce((s, w) => s + w, 0);
@@ -4827,19 +4922,22 @@ Features:
         if (sp >= beta) return beta;
         if (sp > alpha) alpha = sp;
 
-        const capMoves = state.getMoves().filter(m => m.captured.length > 0);
-        if (capMoves.length === 0) return alpha;
+        const poolPos = saveMP();
+        const capMoves = state.getCapturesOnly();
+        if (capMoves.length === 0) { restoreMP(poolPos); return alpha; }
 
         const tte = ttProbe(state.hash());
         const hfm = tte ? tte.mv >> 6 : -1, htm = tte ? tte.mv & 0x3F : -1;
         orderMoves(capMoves, hfm, htm, ply);
 
         for (const m of capMoves) {
-            const ns = state.clone(); ns.applyMove(m);
-            const sc = -qsearch(ns, -beta, -alpha, ply + 1);
-            if (searchAborted) return alpha;
-            if (sc > alpha) { alpha = sc; if (alpha >= beta) return beta; }
+            const undo = state.makeMove(m);
+            const sc = -qsearch(state, -beta, -alpha, ply + 1);
+            state.unmakeMove(m, undo);
+            if (searchAborted) { restoreMP(poolPos); return alpha; }
+            if (sc > alpha) { alpha = sc; if (alpha >= beta) { restoreMP(poolPos); return beta; } }
         }
+        restoreMP(poolPos);
         return alpha;
     }
 
@@ -4866,8 +4964,9 @@ Features:
             }
         }
 
+        const poolPos = saveMP();
         const moves = state.getMoves();
-        if (moves.length === 0) return -9999 + ply;
+        if (moves.length === 0) { restoreMP(poolPos); return -9999 + ply; }
         const hasCaptures = moves[0].captured.length > 0;
 
         // Forced move extension (captures included — single legal move is forced)
@@ -4877,7 +4976,7 @@ Features:
         // Internal Iterative Deepening
         if (hfm < 0 && depth >= 3 && !hasCaptures) {
             search(state, depth - 3, alpha, beta, ply, prevFrom, prevTo);
-            if (searchAborted) return alpha;
+            if (searchAborted) { restoreMP(poolPos); return alpha; }
             const tte2 = ttProbe(hash);
             if (tte2) { hfm = tte2.mv >> 6; htm = tte2.mv & 0x3F; }
         }
@@ -4885,23 +4984,18 @@ Features:
         // Null-move pruning
         let staticEval = null;
         if (!isPV && depth >= 4 && !hasCaptures && beta < 9000 && beta > -9000) {
-            let wK = 0, bK = 0, wP = 0, bP = 0, pc = 0;
-            for (let i = 0; i < 64; i++) {
-                const sq = state.board[i]; if (sq === 0) continue; pc++;
-                if (sq === W_KING) wK++; else if (sq === V_KING) bK++;
-                else if (sq === W_MAN) wP++; else bP++;
-            }
-            const sideKings = state.turn === 1 ? wK : bK;
-            const isPureKingEG = (wP === 0 && bP === 0 && pc <= 6);
+            const pc = state.wP + state.bP + state.wK + state.bK;
+            const sideKings = state.turn === 1 ? state.wK : state.bK;
+            const isPureKingEG = (state.wP === 0 && state.bP === 0 && pc <= 6);
             if (!isPureKingEG && (pc >= 10 || sideKings > 0)) {
                 staticEval = state.eval();
                 if (staticEval >= beta) {
-                    const ns = state.clone();
-                    ns.turn = -ns.turn;
+                    const oldTurn = state.turn; state.turn = -state.turn; state.hash ^= zt;
                     const R = depth >= 9 ? 4 : depth >= 6 ? 3 : 2;
-                    const nullScore = -search(ns, depth - 1 - R, -beta, -beta + 1, ply + 1, -1, -1);
-                    if (searchAborted) return alpha;
-                    if (nullScore >= beta) return nullScore;
+                    const nullScore = -search(state, depth - 1 - R, -beta, -beta + 1, ply + 1, -1, -1);
+                    state.turn = oldTurn; state.hash ^= zt;
+            if (searchAborted) { restoreMP(poolPos); return alpha; }
+                    if (nullScore >= beta) { restoreMP(poolPos); return nullScore; }
                 }
             }
         }
@@ -4910,7 +5004,7 @@ Features:
         if (!isPV && depth <= 2 && !hasCaptures && alpha > -8000) {
             if (staticEval === null) staticEval = state.eval();
             const razorMargin = depth === 1 ? 320 : 540;
-            if (staticEval + razorMargin < alpha) return qsearch(state, alpha, beta, ply);
+            if (staticEval + razorMargin < alpha) { const qs = qsearch(state, alpha, beta, ply); restoreMP(poolPos); return qs; }
         }
 
         orderMoves(moves, hfm, htm, ply);
@@ -4918,7 +5012,6 @@ Features:
         const origAlpha = alpha;
         let bestScore = -Infinity, bestFm = -1, bestTm = -1;
         let quietCount = 0;
-        const LMP_TABLE = [0, 5, 9, 15, 22, 30];
 
         for (let i = 0; i < moves.length; i++) {
             const m = moves[i];
@@ -4936,12 +5029,11 @@ Features:
                 if (staticEval + margin <= alpha) continue;
             }
 
-            const ns = state.clone();
-            ns.applyMove(m);
+            const undo = state.makeMove(m);
 
             let score;
             if (i === 0) {
-                score = -search(ns, depth - 1 + extension, -beta, -alpha, ply + 1, m.from, m.to);
+                score = -search(state, depth - 1 + extension, -beta, -alpha, ply + 1, m.from, m.to);
             } else {
                 // LMR
                 let lmrR = 0;
@@ -4950,12 +5042,13 @@ Features:
                     if (depth >= 5 && i >= 5) lmrR = Math.min(lmrR + 1, depth - 2);
                     if (depth >= 8 && i >= 10) lmrR = Math.min(lmrR + 1, depth - 2);
                 }
-                score = -search(ns, depth - 1 - lmrR, -alpha - 1, -alpha, ply + 1, m.from, m.to);
+                score = -search(state, depth - 1 - lmrR, -alpha - 1, -alpha, ply + 1, m.from, m.to);
                 if (!searchAborted && score > alpha && (lmrR > 0 || isPV)) {
-                    score = -search(ns, depth - 1, -beta, -alpha, ply + 1, m.from, m.to);
+                    score = -search(state, depth - 1, -beta, -alpha, ply + 1, m.from, m.to);
                 }
             }
-            if (searchAborted) return alpha;
+            state.unmakeMove(m, undo);
+            if (searchAborted) { restoreMP(poolPos); return alpha; }
 
             if (score > bestScore) { bestScore = score; bestFm = m.from; bestTm = m.to; }
             if (score > alpha) alpha = score;
@@ -4978,22 +5071,28 @@ Features:
             const flag = bestScore <= origAlpha ? TU : bestScore >= beta ? TL : TE;
             ttStore(hash, depth, bestScore, bestFm, bestTm, flag);
         }
+        restoreMP(poolPos);
         return bestScore;
     }
 
     // ── Aprofundamento iterativo + wrapper getBestMove ────────────
     function getBestMove(state, maxDepth, timeLimitMs) {
+        const poolPos = saveMP();
         const moves = state.getMoves();
-        if (moves.length === 0) return { move: null, score: -10000, depth: 0, nodes: 0, pv: [], isBook: false };
+        if (moves.length === 0) { restoreMP(poolPos); return { move: null, score: -10000, depth: 0, nodes: 0, pv: [], isBook: false }; }
 
         // Book probe
         const bookMove = bookProbe(state);
         if (bookMove) {
+            restoreMP(poolPos);
             return { move: bookMove, score: 0, depth: 0, nodes: 0, pv: [bookMove], isBook: true };
         }
 
-        if (moves.length === 1)
-            return { move: moves[0], score: state.eval(), depth: 1, nodes: 1, pv: [moves[0]], isBook: false };
+        if (moves.length === 1) {
+            const res = { move: moves[0], score: state.eval(), depth: 1, nodes: 1, pv: [moves[0]], isBook: false };
+            restoreMP(poolPos);
+            return res;
+        }
 
         // Reset
         for (let ki = 0; ki < killers.length; ki++) killers[ki] = 0;
@@ -5034,8 +5133,7 @@ Features:
 
         // Root-level variety adaptativa
         {
-            let _totalPc = 0;
-            for (let _i = 0; _i < 64; _i++) if (state.board[_i] !== 0) _totalPc++;
+            const _totalPc = state.wP + state.bP + state.wK + state.bK;
             let VARIETY_CP, VARIETY_TEMP;
             if (_totalPc > 18)       { VARIETY_CP = 15; VARIETY_TEMP = 9; }
             else if (_totalPc > 8)   { VARIETY_CP = 8;  VARIETY_TEMP = 6; }
@@ -5076,6 +5174,7 @@ Features:
             pvState.applyMove(pvNext);
         }
 
+        restoreMP(poolPos);
         return {
             move: bestMove,
             score: bestScore,
@@ -5319,8 +5418,7 @@ Features:
         if (timeLimit===0) return 0;
         const rem = gameState.turn===1 ? timeW : timeB;
         const legalMoves = gameState.getMoves().length;
-        let totalPieces = 0;
-        for (let i = 0; i < 64; i++) if (gameState.board[i] !== 0) totalPieces++;
+        const totalPieces = gameState.wP + gameState.bP + gameState.wK + gameState.bK;
         // Phase factor: opening=0.7, middlegame=1.0, endgame=1.4
         const phaseFactor = totalPieces > 18 ? 0.7 : totalPieces > 8 ? 1.0 : 1.4;
         // Complexity based on legal moves (log scale, capped)
@@ -5400,7 +5498,7 @@ Features:
         stopClock();
         const ns=new State();
         for (let i=0;i<64;i++) ns.board[i]=EMPTY;
-        ns.turn=1; ns.hashHist=[ns.hash()];
+        ns.turn=1; ns._rehash(); ns.hashHist=[ns.hash];
         rootNode={ id:0, parent:null, moveStr:null, state:ns, children:[] };
         nextNodeId=1; allNodes={ 0:rootNode }; currentNode=rootNode;
         gameState=ns.clone();
@@ -5481,7 +5579,7 @@ Features:
             else if (p===V_KING) gameState.board[idx]=EMPTY;
             if (gameState.board[idx] === W_MAN && r === 7) gameState.board[idx] = W_KING;
             if (gameState.board[idx] === V_MAN && r === 0) gameState.board[idx] = V_KING;
-            gameState.hashHist=[gameState.hash()];
+            gameState._rehash(); gameState.hashHist=[gameState.hash];
             render(); return;
         }
         if (!gameStarted||isComputing||gameEnded) return;
