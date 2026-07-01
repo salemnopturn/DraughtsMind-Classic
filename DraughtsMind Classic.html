@@ -963,8 +963,6 @@ Features:
             return s;
         }
 
-        hash() { return this.hash; }
-
         _rehash() {
             let h = 0n;
             this.wP = this.bP = this.wK = this.bK = 0;
@@ -1229,7 +1227,7 @@ Features:
                     ? "Empate: limite de 2 lances em 1 Dama × 1 Dama (CBD Art.59.D)."
                     : "Empate: limite de 5 lances no final (CBD Art.59.E/F).";
             if (this.hashHist.length >= 9) {
-                const cur = this.hash(); let cnt = 0;
+                const cur = this.hash; let cnt = 0;
                 for (const h of this.hashHist) if (h === cur) cnt++;
                 if (cnt >= 3) return "Empate: mesma posição repetida 3 vezes (CBD Art.98).";
             }
@@ -4748,7 +4746,7 @@ Features:
             const lm = s.getMoves();
             const found = lm.find(m => m.from === mi.from && m.to === mi.to);
             if (!found) return; // linha inválida — para aqui
-            const h = s.hash();
+            const h = s.hash;
             if (!bookMap.has(h)) bookMap.set(h, []);
             const arr = bookMap.get(h);
             if (!arr.includes(found.from * 64 + found.to))
@@ -4875,7 +4873,7 @@ Features:
     // softmax com temperatura adaptativa [BOOK-V29-TEMP]: T=14 na abertura,
     // T=10 no meio-jogo, T=8 no final — menos aleatoriedade quando importa mais.
     function bookProbe(state) {
-        const h = state.hash();
+        const h = state.hash;
         const arr = bookMap.get(h);
         if (!arr || arr.length === 0) return null;
         const lm = state.getMoves();
@@ -4926,7 +4924,7 @@ Features:
         const capMoves = state.getCapturesOnly();
         if (capMoves.length === 0) { restoreMP(poolPos); return alpha; }
 
-        const tte = ttProbe(state.hash());
+        const tte = ttProbe(state.hash);
         const hfm = tte ? tte.mv >> 6 : -1, htm = tte ? tte.mv & 0x3F : -1;
         orderMoves(capMoves, hfm, htm, ply);
 
@@ -4951,7 +4949,7 @@ Features:
         const isPV = beta > alpha + 1;
         if (depth <= 0) return qsearch(state, alpha, beta, ply);
 
-        const hash = state.hash();
+        const hash = state.hash;
         let hfm = -1, htm = -1;
         const tte = ttProbe(hash);
         if (tte) {
@@ -5122,7 +5120,7 @@ Features:
             }
             if (searchAborted) break;
 
-            const tte = ttProbe(state.hash());
+            const tte = ttProbe(state.hash);
             if (tte && (tte.mv >> 6) >= 0) {
                 const f = moves.find(m => m.from === (tte.mv >> 6) && m.to === (tte.mv & 0x3F));
                 if (f) { bestMove = f; bestScore = score; }
@@ -5165,7 +5163,7 @@ Features:
         let pvState = state.clone();
         pvState.applyMove(bestMove);
         for (let pvDepth = 1; pvDepth < 5; pvDepth++) {
-            const ttePV = ttProbe(pvState.hash());
+            const ttePV = ttProbe(pvState.hash);
             if (!ttePV || (ttePV.mv >> 6) < 0) break;
             const pvMoves = pvState.getMoves();
             const pvNext = pvMoves.find(m => m.from === (ttePV.mv >> 6) && m.to === (ttePV.mv & 0x3F));
@@ -5241,7 +5239,7 @@ Features:
             const sq=document.createElement('div');
             sq.className=`square ${dark?'sq-dark':'sq-light'}`;
             sq.id=`sq-${idx}`; sq.onclick=()=>onSquareClick(idx);
-            sq.oncontextmenu=(e)=>{ e.preventDefault(); if(editMode){ gameState.board[idx]=EMPTY; gameState.hashHist=[gameState.hash()]; render(); } };
+            sq.oncontextmenu=(e)=>{ e.preventDefault(); if(editMode){ gameState.board[idx]=EMPTY; gameState.hashHist=[gameState.hash]; render(); } };
             board.appendChild(sq);
         }
         // Coordinates are in static overlays OUTSIDE .board — see updateCoords()
@@ -5540,7 +5538,7 @@ Features:
             gameStarted = true; gameEnded = false; isComputing = false;
             currentNode.state = gameState.clone();
             currentNode.state.turn = editStartTurn;
-            currentNode.state.hashHist = [currentNode.state.hash()];
+            currentNode.state.hashHist = [currentNode.state.hash];
             gameState = currentNode.state.clone();
             cfgView = editStartTurn === 1 ? 'W' : 'B';
             document.getElementById('cfg-view').value = cfgView;
@@ -5764,7 +5762,7 @@ Features:
     document.getElementById('btn-export').onclick=async()=>{
         const result=gameEnded?(gameState.turn===1?'0-2':'2-0'):'*';
         let txt=`[Event "DraughtsMind Elite Match"]\n[GameType "26"]\n[Result "${result}"]\n`;
-        txt+=`{DraughtsMind v${ENGINE_VERSION} | depth:${cfgDepth} | time:${timeLimit} | hash:${gameState.hash().toString(16).toUpperCase().slice(-8)}}\n\n`;
+        txt+=`{DraughtsMind v${ENGINE_VERSION} | depth:${cfgDepth} | time:${timeLimit} | hash:${gameState.hash.toString(16).toUpperCase().slice(-8)}}\n\n`;
         txt+=generatePDN(rootNode,0)+`\n${result}\n`;
         const name=`mind_game_${Date.now()}.pdn`;
         if (window.showSaveFilePicker) {
